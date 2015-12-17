@@ -21,6 +21,7 @@ definition(
 preferences {
 	section ("Weather threshholds to alert at..."){
     	input "highwindspeed", "number", title: "Avg Wind Speed (MPH)", required: false, defaultValue: 10
+    	input "highwindgust", "number", title: "High Wind Gust (MPH)", required: false, defaultValue: 18
     	input "hightempf", "number", title: "High Temperature (Deg F)", required: false, defaultValue: 85
     	input "lowtempf", "number", title: "Low Temperature (Deg F)", required: false, defaultValue: 37
     	input "highrainfall", "number", title: "Rainfall Threshhold (Inches)", required: false, defaultValue: 1    
@@ -37,6 +38,7 @@ preferences {
 		input "warmmsg", "text", description: "Its hot at the weather station ", title: "Too Hot Message", required: false, defaultValue: "Its hot at the weather station "
 		input "coldmsg", "text", description: "Its cold at the weather station ", title: "Too Cold Message", required: false, defaultValue: "Its cold at the weather station "
 		input "windymsg", "text", description: "Its windy at the weather station ", title: "Windy Message", required: false, defaultValue: "Its windy at the weather station "
+		input "gustymsg", "text", description: "Whoa that was a gust... ", title: "Wind Gust Message", required: false, defaultValue: "Whoa that was a gust... "
 		input "wetmsg", "text", description: "Its really wet out ", title: "Wet Message", required: false, defaultValue: "Its really wet out "
 	}
 }
@@ -44,6 +46,7 @@ preferences {
 def installed() {
 	log.debug "Installed with settings: ${settings}"
 	setDefaultWeather()
+    runIn(5, "checkWeather")
 	runEvery5Minutes("checkWeather") //Check at top and half-past of every hour
     schedule("0 0 5,16 * * ?", "setDefaultWeather") //Reset in the morning
 }
@@ -51,6 +54,7 @@ def installed() {
 def updated() {
 	log.debug "Updated with settings: ${settings}"
     setDefaultWeather()
+    runIn(5, "checkWeather")
 	runEvery5Minutes("checkWeather") //Check at top and half-past of every hour
     schedule("0 0 5,16 * * ?", "setDefaultWeather") //Reset in the morning
 }
@@ -71,60 +75,106 @@ def checkWeather() {
     def windspeed = weather.current_observation.wind_mph
     def tempf = weather.current_observation.temp_f
     def hourlyprecip = Float.parseFloat(weather.current_observation.precip_1hr_in)
-
-    log.debug "Actual: ${windspeed}, ${tempf}, ${hourlyprecip}"
-    log.debug "Threshholds: ${highwindspeed}, ${hightempf}, ${lowtempf}, ${hourlyprecip}"
-    log.debug "State: ${state.lastHighWindSpeed}, ${state.lasthightempf}, ${state.lastlowtempf}, ${state.lasthourlyprecip}"
-	log.debug "${settings.windymsg} ${settings.warmmsg} ${settings.coldmsg} ${settings.wetmsg}"
-    log.debug "sending: http://grovestreams.com:80/api/feed?api_key=${appSettings.grovestreamsKey}&compid=cmp1&tempF=${tempf}"
-    httpPut("http://grovestreams.com:80/api/feed?api_key=${appSettings.grovestreamsKey}&compid=cmp1&tempF=${tempf}","")
-    { gsResponse ->
-        if (gsReponse != null) {
-            log.debug gsResponse.data
-        }
+    def windguststr = weather.current_observation.wind_gust_mph
+    def windgust = 0.0
+     
+    try {
+     	windgust = Float.parseFloat(weather.current_observation.wind_gust_mph)
+    }
+    catch ( e ) 
+    { 
+    	windgust = 0.0 
+    }
+	
+    log.debug "Actual: ${windspeed}, ${tempf}, ${hourlyprecip}, ${windgust}"
+    log.debug "Threshholds: ${highwindspeed}, ${hightempf}, ${lowtempf}, ${hourlyprecip}, ${highwindgust}"
+    log.debug "State: ${state.lastHighWindSpeed}, ${state.lasthightempf}, ${state.lastlowtempf}, ${state.lasthourlyprecip}, ${state.lasthighwindgust}"
+	log.debug "${settings.windymsg} ${settings.warmmsg} ${settings.coldmsg} ${settings.wetmsg} ${settings.gustymsg}"
+	log.debug "sending: http://grovestreams.com:80/api/feed?api_key=${appSettings.grovestreamsKey}&compid=cmp1&tempF=${tempf}"
+    
+	try
+    {
+		httpPut("http://grovestreams.com:80/api/feed?api_key=${appSettings.grovestreamsKey}&compid=cmp1&tempF=${tempf}","")
+    }
+    catch(e)
+    {
     }
     
     if (windspeed > highwindspeed) {
         if (windspeed >= state.lastHighWindSpeed + 3.0 ) {
             state.lastHighWindSpeed = windspeed
-            notifyPeople("${settings.windymsg} ${windspeed}")
+            notifyPeople("${settings.windymsg} ${windspeed}", state.lasthighwindspeedreport)
+            state.lasthighwindspeedreport = now()
         } else {log.debug "not enough wind speed change"}
     } else { state.lastHighWindSpeed = windspeed }
 
+	if (windgust > highwindgust) {
+        state.lasthighwindgust = windgust
+        notifyPeople("${settings.gustymsg} ${windgust}", state.lasthighwindgustreport) 
+        state.lasthighwindgustreport = now()
+    } else { state.lasthighwindgust = windgust }
+
     if (tempf > hightempf) {
-        if (tempf >= state.lasthightempf + 3.0 ) {
+        if (tempf >= state.lasthightempf + 2.0 ) {
             state.lasthightempf = tempf
-            notifyPeople("${settings.warmmsg} ${tempf}F")
+            notifyPeople("${settings.warmmsg} ${tempf}F", state.lasthightempreport)
+            state.lasthightempreport = now()
         } else {log.debug "not enough high temp change"}
     } else { state.lasthightempf = tempf }
 
     if (tempf < lowtempf) {
-        if (tempf <= state.lastlowtempf - 3.0 ) {
+        if (tempf <= state.lastlowtempf - 2.0 ) {
             state.lastlowtempf = tempf
-            notifyPeople("${settings.coldmsg} ${tempf}F")
+            notifyPeople("${settings.coldmsg} ${tempf}F", state.lastlowtempreport)
+            state.lastlowtempreport = now()
         } else { log.debug "not enough low temp change" }
     } else { state.lastlowtempf = tempf }
 
     if (hourlyprecip > highrainfall) {
         if (hourlyprecip  >= state.lasthourlyprecip + 1.0 ) {
             state.lasthourlyprecip = hourlyprecip 
-            notifyPeople("${settings.wetmsg} ${hourlyprecip}in.")
+            notifyPeople("${settings.wetmsg} ${hourlyprecip}in.", state.lasthighprecipreport)
+            state.lasthighprecipreport = now()
         } else {log.debug "not enough precip change"}
     } else { state.lasthourlyprecip = hourlyprecip }
 }
 
-def setDefaultWeather() {
-    state.lastHighWindSpeed = 0.0
-    state.lasthightempf = 65.0
-    state.lastlowtempf = 40.0
-    state.lasthourlyprecip = 0.0
-    log.debug "state: ${state.lastHighWindSpeed}, ${state.lasthightempf}, ${state.lastlowtempf}, ${state.lasthourlyprecip}"
+def calculateTimeDelta(reportTimeStamp) {
+    	        
+    	def timeDiff = Math.abs(now()-reportTimeStamp)
+    	timeDiff = Math.round(timeDiff/(1000*60))
+    
+        log.debug "Last Report: ${reportTimeStamp}, Time since last report: ${timeDiff}"
+        return timeDiff
 }
 
-private notifyPeople(message) {
+def setDefaultWeather() {
+    state.lastHighWindSpeed = 0.0
+    state.lasthighwindgust = 0.0
+    state.lasthightempf = 65.0
+    state.lastlowtempf = 55.0
+    state.lasthourlyprecip = 0.0
+    
+    state.lasthightempreport = now() - (15*1000*60)
+    state.lasthighwindspeedreport = now() - (15*1000*60)
+    state.lastlowtempreport = now() - (15*1000*60)
+    state.lasthighprecipreport = now() - (15*1000*60)
+    state.lasthighwindgustreport = now() - (15*1000*60)
+    
+	log.debug "Resetting weather state values"
+}
+
+private notifyPeople(message, lastReport) {
 
     def t0 = new Date(now() - (8 * 60 * 60 * 1000))
 	def h0 = t0.getHours()
+
+	def lastReportInterval = calculateTimeDelta(lastReport)
+    if ( lastReportInterval < 15)
+    {
+    	log.debug "Too soon, less than 15 minutes: ${lastReportInterval}"
+        return
+	}
 
 	if (h0 >= 6 && h0 <= 22)
     {
